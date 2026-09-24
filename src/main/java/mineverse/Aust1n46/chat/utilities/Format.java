@@ -12,8 +12,13 @@ import mineverse.Aust1n46.chat.MineverseChat;
 import org.apache.commons.lang.StringUtils;
 import org.bukkit.Bukkit;
 import org.bukkit.ChatColor;
+import org.bukkit.Material;
+import org.bukkit.NamespacedKey;
+import org.bukkit.Registry;
 import org.bukkit.Sound;
 import org.bukkit.entity.Player;
+import org.bukkit.inventory.ItemStack;
+import org.bukkit.inventory.meta.ItemMeta;
 import org.json.simple.JSONObject;
 
 import com.comphenix.protocol.PacketType;
@@ -22,6 +27,11 @@ import com.comphenix.protocol.events.PacketContainer;
 import com.comphenix.protocol.wrappers.WrappedChatComponent;
 
 import me.clip.placeholderapi.PlaceholderAPI;
+import net.kyori.adventure.text.Component;
+import net.kyori.adventure.text.event.HoverEvent;
+import net.kyori.adventure.text.minimessage.MiniMessage;
+import net.kyori.adventure.text.serializer.gson.GsonComponentSerializer;
+import net.kyori.adventure.text.serializer.legacy.LegacyComponentSerializer;
 import mineverse.Aust1n46.chat.ClickAction;
 import mineverse.Aust1n46.chat.api.MineverseChatAPI;
 import mineverse.Aust1n46.chat.api.MineverseChatPlayer;
@@ -47,6 +57,7 @@ public class Format {
 			"(?<!(&x(&[a-fA-F0-9]){5}))(?<!(&x(&[a-fA-F0-9]){4}))(?<!(&x(&[a-fA-F0-9]){3}))(?<!(&x(&[a-fA-F0-9]){2}))(?<!(&x(&[a-fA-F0-9]){1}))(?<!(&x))(&)([0-9a-fA-F])");
 	
 	private static final Pattern PLACEHOLDERAPI_PLACEHOLDER_PATTERN = Pattern.compile("\\{([^\\{\\}]+)\\}");
+	private static final Pattern NEXO_PLACEHOLDER_PATTERN = Pattern.compile("%nexo_[^%]+%", Pattern.CASE_INSENSITIVE);
 	
 	public static final long MILLISECONDS_PER_DAY = 86400000;
 	public static final long MILLISECONDS_PER_HOUR = 3600000;
@@ -71,7 +82,7 @@ public class Format {
 		String json = "[\"\",{\"text\":\"\",\"extra\":[";
 		json += convertPlaceholders(format, JSONformat, sender);
 		json += "]}";
-		json += "," + convertLinks(c);
+		json += "," + convertItemPlaceholdersAndLinks(sender, c);
 		json += "]";
 		if (getInstance().getConfig().getString("loglevel", "info").equals("debug")) {
 			System.out.println(json);
@@ -109,7 +120,7 @@ public class Format {
 				indexStart = matcher.start();
 				indexEnd = matcher.end();
 				placeholder = remaining.substring(indexStart, indexEnd);
-				formattedPlaceholder = escapeJsonChars(Format.FormatStringAll(PlaceholderAPI.setBracketPlaceholders(icp.getPlayer(), placeholder)));
+				formattedPlaceholder = escapeJsonChars(Format.FormatStringAll(Format.applyAllPlaceholders(icp.getPlayer(), placeholder)));
 				temp += convertToJsonColors(escapeJsonChars(lastCode + remaining.substring(0, indexStart))) + ",";
 				lastCode = getLastCode(lastCode + remaining.substring(0, indexStart));
 				boolean placeholderHasJsonAttribute = false;
@@ -122,7 +133,7 @@ public class Format {
 						final String hoverText;
 						if(!hover.isEmpty()) {
 							hoverText = escapeJsonChars(Format.FormatStringAll(
-									PlaceholderAPI.setBracketPlaceholders(icp.getPlayer(), hover.substring(0, hover.length() - 1))));
+									Format.applyAllPlaceholders(icp.getPlayer(), hover.substring(0, hover.length() - 1))));
 						} else {
 							hoverText = StringUtils.EMPTY;
 						}
@@ -132,7 +143,7 @@ public class Format {
 							actionJson = StringUtils.EMPTY;
 						} else {
 							final String clickText = escapeJsonChars(Format.FormatStringAll(
-									PlaceholderAPI.setBracketPlaceholders(icp.getPlayer(), jsonAttribute.getClickText())));
+									Format.applyAllPlaceholders(icp.getPlayer(), jsonAttribute.getClickText())));
 							actionJson = ",\"click_event\":{\"action\":\"" + jsonAttribute.getClickAction().toString() + "\",\"command\":\"" + clickText
 							+ "\"}";
 						}
@@ -203,6 +214,489 @@ public class Format {
 			}
 		} while (true);
 		return temp;
+	}
+
+	private static final String ITEM_CHAT_CONFIG_PATH = "itemchat";
+
+	/**
+	 * Returns true when the item chat feature is enabled, the sender is allowed
+	 * to use it, and {@code message} contains at least one configured
+	 * placeholder. Used to decide whether a private message should be sent as
+	 * a raw string or through the JSON packet path to render the item preview.
+	 */
+	public static boolean containsItemChatPlaceholder(MineverseChatPlayer sender, String message) {
+		if (message == null || message.isEmpty()) {
+			return false;
+		}
+		if (sender == null || sender.getPlayer() == null
+				|| !getInstance().getConfig().getBoolean(ITEM_CHAT_CONFIG_PATH + ".enabled", false)) {
+			return false;
+		}
+		List<String> placeholders = getInstance().getConfig().getStringList(ITEM_CHAT_CONFIG_PATH + ".placeholders");
+		if (placeholders == null || placeholders.isEmpty()) {
+			return false;
+		}
+		String permission = getInstance().getConfig().getString(ITEM_CHAT_CONFIG_PATH + ".permission", "None");
+		if (permission != null && !permission.isEmpty() && !permission.equalsIgnoreCase("None")
+				&& !sender.getPlayer().hasPermission(permission)) {
+			return false;
+		}
+		for (String placeholder : placeholders) {
+			if (placeholder != null && !placeholder.isEmpty() && message.contains(placeholder)) {
+				return true;
+			}
+		}
+		return false;
+	}
+
+	/**
+	 * Sends a private-message-style chat line to {@code recipient}. If the
+	 * sender's message contains an item chat placeholder it is rendered as a
+	 * JSON component with an item preview hover; otherwise the traditional
+	 * {@link Player#sendMessage(String)} path is used to preserve the exact
+	 * legacy behavior for players who do not use the feature.
+	 *
+	 * @param sender    the player the message originates from (for held item lookup).
+	 * @param recipient the player who will receive the rendered message.
+	 * @param prefix    the pre-formatted prefix text (already colored, no placeholders remaining).
+	 * @param message   the pre-formatted message body (already colored).
+	 */
+	public static void sendPrivateMessage(MineverseChatPlayer sender, Player recipient, String prefix, String message) {
+		if (recipient == null) {
+			return;
+		}
+		if (!containsItemChatPlaceholder(sender, message)) {
+			recipient.sendMessage(prefix + message);
+			return;
+		}
+		String json = convertPrivateMessageToJson(sender, prefix, message);
+		PacketContainer packet = createPacketPlayOutChat(json);
+		sendPacketPlayOutChat(recipient, packet);
+	}
+
+	private static String convertPrivateMessageToJson(MineverseChatPlayer sender, String prefix, String message) {
+		String safePrefix = prefix == null ? "" : prefix;
+		String safeMessage = message == null ? "" : message;
+		String escapedPrefix = escapeJsonChars(safePrefix);
+		String escapedMessage = escapeJsonChars(safeMessage);
+		String prefixLastCode = getLastCode(DEFAULT_COLOR_CODE + escapedPrefix);
+		if (prefixLastCode == null || prefixLastCode.isEmpty()) {
+			prefixLastCode = DEFAULT_COLOR_CODE;
+		}
+		StringBuilder json = new StringBuilder();
+		json.append("[\"\",");
+		json.append(convertToJsonColors(DEFAULT_COLOR_CODE + escapedPrefix));
+		json.append(',');
+		json.append(convertItemPlaceholdersAndLinks(sender, prefixLastCode + escapedMessage));
+		json.append(']');
+		return json.toString();
+	}
+
+	/**
+	 * Same as {@link #convertLinks(String)}, but also replaces item chat
+	 * placeholders configured under {@code itemchat.placeholders} with a JSON
+	 * component that shows on hover the name and lore of the item currently
+	 * held in the sender's main hand.
+	 */
+	private static String convertItemPlaceholdersAndLinks(MineverseChatPlayer sender, String s) {
+		if (sender == null || sender.getPlayer() == null
+				|| !getInstance().getConfig().getBoolean(ITEM_CHAT_CONFIG_PATH + ".enabled", false)) {
+			return convertLinks(s);
+		}
+		List<String> placeholders = getInstance().getConfig().getStringList(ITEM_CHAT_CONFIG_PATH + ".placeholders");
+		if (placeholders == null || placeholders.isEmpty()) {
+			return convertLinks(s);
+		}
+		String permission = getInstance().getConfig().getString(ITEM_CHAT_CONFIG_PATH + ".permission", "None");
+		if (permission != null && !permission.isEmpty() && !permission.equalsIgnoreCase("None")
+				&& !sender.getPlayer().hasPermission(permission)) {
+			return convertLinks(s);
+		}
+
+		StringBuilder patternBuilder = new StringBuilder();
+		boolean addedAny = false;
+		for (String placeholder : placeholders) {
+			if (placeholder == null || placeholder.isEmpty()) {
+				continue;
+			}
+			if (addedAny) {
+				patternBuilder.append('|');
+			}
+			patternBuilder.append(Pattern.quote(placeholder));
+			addedAny = true;
+		}
+		if (!addedAny) {
+			return convertLinks(s);
+		}
+
+		Pattern pattern = Pattern.compile(patternBuilder.toString());
+		Matcher matcher = pattern.matcher(s);
+		if (!matcher.find()) {
+			return convertLinks(s);
+		}
+		matcher.reset();
+
+		ItemStack heldItem = resolveHeldItem(sender);
+		String itemJson = buildItemChatJson(sender, heldItem);
+
+		StringBuilder result = new StringBuilder();
+		int lastEnd = 0;
+		String lastCode = DEFAULT_COLOR_CODE;
+		boolean firstPart = true;
+		while (matcher.find()) {
+			int start = matcher.start();
+			int end = matcher.end();
+			if (start > lastEnd) {
+				String segment = s.substring(lastEnd, start);
+				if (!firstPart) {
+					result.append(',');
+				}
+				result.append(convertLinks(lastCode + segment));
+				lastCode = getLastCode(lastCode + segment);
+				firstPart = false;
+			}
+			if (!firstPart) {
+				result.append(',');
+			}
+			result.append(itemJson);
+			firstPart = false;
+			lastEnd = end;
+		}
+		if (lastEnd < s.length()) {
+			String segment = s.substring(lastEnd);
+			if (!firstPart) {
+				result.append(',');
+			}
+			result.append(convertLinks(lastCode + segment));
+		}
+		return result.toString();
+	}
+
+	/**
+	 * Returns the item to preview for the sender. Tries a live main-hand read
+	 * first — safe when we are on the sender's owning thread (main on Paper,
+	 * region thread on Folia when the call originates from a command) — and
+	 * falls back to the snapshot cached at chat dispatch time when the live
+	 * read is not allowed (typically async chat handlers on Folia). The
+	 * returned {@link ItemStack} is always an independent copy.
+	 */
+	private static ItemStack resolveHeldItem(MineverseChatPlayer sender) {
+		if (sender == null || sender.getPlayer() == null) {
+			return null;
+		}
+		try {
+			ItemStack live = sender.getPlayer().getInventory().getItemInMainHand();
+			return live == null ? null : live.clone();
+		} catch (Exception ignored) {
+			ItemStack snapshot = sender.getChatHeldItemSnapshot();
+			return snapshot == null ? null : snapshot.clone();
+		}
+	}
+
+	/**
+	 * Builds the JSON component representing the item-chat placeholder for a
+	 * given held item. The visible text comes from {@code itemchat.format} (or
+	 * {@code itemchat.emptyformat} when the hand is empty) and the hover text
+	 * lists the item's display name followed by its lore lines.
+	 */
+	private static String buildItemChatJson(MineverseChatPlayer sender, ItemStack item) {
+		Player senderPlayer = (sender == null) ? null : sender.getPlayer();
+		boolean isEmpty = (item == null || item.getType() == Material.AIR);
+		String format;
+		String itemName;
+		int amount;
+		Material type;
+		int maxNameChars = getInstance().getConfig().getInt(ITEM_CHAT_CONFIG_PATH + ".max_name_length", 100);
+		if (isEmpty) {
+			format = getInstance().getConfig().getString(ITEM_CHAT_CONFIG_PATH + ".emptyformat", "&8[&7empty hand&8]");
+			itemName = "";
+			amount = 0;
+			type = Material.AIR;
+		} else {
+			format = getInstance().getConfig().getString(ITEM_CHAT_CONFIG_PATH + ".format", "&e[&f{item_name}&e]");
+			itemName = truncate(getItemDisplayName(item), maxNameChars);
+			amount = item.getAmount();
+			type = item.getType();
+			if (amount > 1) {
+				format += getInstance().getConfig().getString(ITEM_CHAT_CONFIG_PATH + ".amountsuffix", " &7x{item_amount}");
+			}
+		}
+
+		String rawText = format
+				.replace("{item_name}", itemName)
+				.replace("{item_amount}", String.valueOf(amount))
+				.replace("{item_type}", type.name());
+		String text = applyNexoGlyphPlaceholders(senderPlayer, FormatStringAll(rawText));
+		if (!text.startsWith(BUKKIT_COLOR_CODE_PREFIX)) {
+			text = DEFAULT_COLOR_CODE + text;
+		}
+		String escapedText = escapeJsonChars(text);
+
+		if (isEmpty) {
+			return convertToJsonColors(escapedText);
+		}
+
+		// Prefer the native show_item hover so the client renders the actual
+		// item tooltip. This carries over Nexo tooltype styling, custom model
+		// data, glyphs, enchantment lines and every data component without us
+		// having to reconstruct them by hand.
+		String nativeHover = buildShowItemJson(text, item);
+		if (nativeHover != null) {
+			return nativeHover;
+		}
+		// Fallback: rebuild the tooltip ourselves as show_text.
+		return buildShowTextFallback(escapedText, senderPlayer, itemName, getItemLore(item));
+	}
+
+	private static String buildShowItemJson(String visibleLegacyText, ItemStack item) {
+		try {
+			Component visible = LegacyComponentSerializer.legacySection().deserialize(visibleLegacyText);
+			HoverEvent<?> hover = item.asHoverEvent();
+			Component withHover = visible.hoverEvent(hover);
+			String serialized = GsonComponentSerializer.gson().serialize(withHover);
+			if (serialized == null || serialized.isEmpty()) {
+				return null;
+			}
+			return serialized;
+		} catch (Throwable ignored) {
+			return null;
+		}
+	}
+
+	private static String buildShowTextFallback(String escapedVisibleText, Player senderPlayer, String itemName, List<String> lore) {
+		int maxLoreLines = getInstance().getConfig().getInt(ITEM_CHAT_CONFIG_PATH + ".max_lore_lines", 30);
+		int maxLoreChars = getInstance().getConfig().getInt(ITEM_CHAT_CONFIG_PATH + ".max_lore_line_length", 250);
+
+		StringBuilder hoverExtra = new StringBuilder();
+		String nameLine = applyNexoGlyphPlaceholders(senderPlayer, FormatStringAll(itemName));
+		if (nameLine.indexOf(BUKKIT_COLOR_CODE_PREFIX_CHAR) < 0) {
+			nameLine = BUKKIT_COLOR_CODE_PREFIX + "f" + BUKKIT_COLOR_CODE_PREFIX + "o" + nameLine;
+		}
+		hoverExtra.append(convertToJsonColors(escapeJsonChars(nameLine)));
+		if (lore != null) {
+			int emitted = 0;
+			for (String loreLine : lore) {
+				if (loreLine == null) {
+					continue;
+				}
+				if (emitted >= maxLoreLines) {
+					String cutoff = FormatStringAll("&8&o... &7(" + (lore.size() - emitted) + " more)");
+					hoverExtra.append(",{\"text\":\"\\n\"},");
+					hoverExtra.append(convertToJsonColors(escapeJsonChars(cutoff)));
+					break;
+				}
+				String truncated = truncate(loreLine, maxLoreChars);
+				String rendered = applyNexoGlyphPlaceholders(senderPlayer, FormatStringAll(truncated));
+				if (rendered.indexOf(BUKKIT_COLOR_CODE_PREFIX_CHAR) < 0) {
+					rendered = BUKKIT_COLOR_CODE_PREFIX + "5" + BUKKIT_COLOR_CODE_PREFIX + "o" + rendered;
+				}
+				hoverExtra.append(",{\"text\":\"\\n\"},");
+				hoverExtra.append(convertToJsonColors(escapeJsonChars(rendered)));
+				emitted++;
+			}
+		}
+
+		String hoverExt = ",\"hover_event\":{\"action\":\"show_text\",\"value\":{\"text\":\"\",\"extra\":["
+				+ hoverExtra + "]}}";
+		return convertToJsonColors(escapedVisibleText, hoverExt);
+	}
+
+	private static String getItemDisplayName(ItemStack item) {
+		ItemMeta meta = item.hasItemMeta() ? item.getItemMeta() : null;
+		if (meta != null) {
+			// Prefer the modern Adventure display name (respects Component-based
+			// formatting including glyph tags Nexo may embed as Component payloads).
+			try {
+				Component displayComponent = meta.displayName();
+				if (displayComponent != null) {
+					String legacy = LegacyComponentSerializer.legacySection().serialize(displayComponent);
+					if (!legacy.isEmpty()) {
+						return legacy;
+					}
+				}
+			} catch (Throwable ignored) {
+			}
+			// Legacy String display name (still populated by many plugins).
+			if (meta.hasDisplayName()) {
+				String display = meta.getDisplayName();
+				if (display != null && !display.isEmpty()) {
+					return display;
+				}
+			}
+			// 1.20.5+ minecraft:item_name component — used by Nexo and other
+			// modern plugins that ship items with an immutable display name.
+			try {
+				if (meta.hasItemName()) {
+					Component itemNameComponent = meta.itemName();
+					if (itemNameComponent != null) {
+						String legacy = LegacyComponentSerializer.legacySection().serialize(itemNameComponent);
+						if (!legacy.isEmpty()) {
+							return legacy;
+						}
+					}
+				}
+			} catch (Throwable ignored) {
+			}
+		}
+		// Paper API: ItemStack#effectiveName() / displayName() resolve the actual
+		// tooltip title including the minecraft:item_name data component and any
+		// vanilla translation key. This catches Nexo items whose name lives in
+		// a data component that ItemMeta does not expose directly.
+		try {
+			java.lang.reflect.Method effective = item.getClass().getMethod("effectiveName");
+			Object result = effective.invoke(item);
+			if (result instanceof Component) {
+				String legacy = LegacyComponentSerializer.legacySection().serialize((Component) result);
+				if (!legacy.isEmpty()) {
+					return legacy;
+				}
+			}
+		} catch (Throwable ignored) {
+		}
+		try {
+			java.lang.reflect.Method displayName = item.getClass().getMethod("displayName");
+			Object result = displayName.invoke(item);
+			if (result instanceof Component) {
+				String legacy = LegacyComponentSerializer.legacySection().serialize((Component) result);
+				// ItemStack#displayName wraps its output in "[name]" for chat use.
+				if (legacy.startsWith("[") && legacy.endsWith("]") && legacy.length() > 2) {
+					legacy = legacy.substring(1, legacy.length() - 1);
+				}
+				if (!legacy.isEmpty()) {
+					return legacy;
+				}
+			}
+		} catch (Throwable ignored) {
+		}
+		// Ask Nexo directly if the plugin is installed and this is one of its items.
+		String nexoName = resolveNexoItemName(item);
+		if (nexoName != null && !nexoName.isEmpty()) {
+			return nexoName;
+		}
+		return prettifyMaterialName(item.getType());
+	}
+
+	// Last-resort reflection into Nexo's public API to recover the display
+	// name of a custom item. Returns null when Nexo is absent, the item is
+	// vanilla, or the API shape does not match. Never throws.
+	private static String resolveNexoItemName(ItemStack item) {
+		if (item == null) {
+			return null;
+		}
+		try {
+			if (!Bukkit.getPluginManager().isPluginEnabled("Nexo")) {
+				return null;
+			}
+			Class<?> nexoItems = Class.forName("com.nexomc.nexo.api.NexoItems");
+			Object idObj = nexoItems.getMethod("idFromItem", ItemStack.class).invoke(null, item);
+			if (idObj == null) {
+				return null;
+			}
+			Object builder = nexoItems.getMethod("itemFromId", String.class).invoke(null, idObj);
+			if (builder == null) {
+				return null;
+			}
+			for (String methodName : new String[] { "displayName", "getDisplayName", "itemName", "getItemName" }) {
+				try {
+					java.lang.reflect.Method m = builder.getClass().getMethod(methodName);
+					Object result = m.invoke(builder);
+					if (result instanceof Component) {
+						String legacy = LegacyComponentSerializer.legacySection().serialize((Component) result);
+						if (!legacy.isEmpty()) {
+							return legacy;
+						}
+					} else if (result instanceof String && !((String) result).isEmpty()) {
+						return (String) result;
+					}
+				} catch (NoSuchMethodException ignored) {
+				}
+			}
+			// Fall back to the Nexo item ID prettified.
+			if (idObj instanceof String) {
+				String id = (String) idObj;
+				return prettifyIdentifier(id);
+			}
+		} catch (Throwable ignored) {
+		}
+		return null;
+	}
+
+	private static String prettifyIdentifier(String id) {
+		if (id == null || id.isEmpty()) {
+			return "";
+		}
+		String[] words = id.toLowerCase().replace('-', '_').split("_");
+		StringBuilder sb = new StringBuilder();
+		for (int i = 0; i < words.length; i++) {
+			if (i > 0) {
+				sb.append(' ');
+			}
+			if (!words[i].isEmpty()) {
+				sb.append(Character.toUpperCase(words[i].charAt(0)));
+				if (words[i].length() > 1) {
+					sb.append(words[i].substring(1));
+				}
+			}
+		}
+		return sb.toString();
+	}
+
+	private static List<String> getItemLore(ItemStack item) {
+		if (!item.hasItemMeta()) {
+			return null;
+		}
+		ItemMeta meta = item.getItemMeta();
+		if (meta == null) {
+			return null;
+		}
+		// Adventure lore first (preserves Component formatting for modern plugins).
+		try {
+			List<Component> componentLore = meta.lore();
+			if (componentLore != null && !componentLore.isEmpty()) {
+				List<String> serialized = new ArrayList<>(componentLore.size());
+				for (Component line : componentLore) {
+					if (line == null) {
+						continue;
+					}
+					serialized.add(LegacyComponentSerializer.legacySection().serialize(line));
+				}
+				if (!serialized.isEmpty()) {
+					return serialized;
+				}
+			}
+		} catch (Throwable ignored) {
+		}
+		if (meta.hasLore()) {
+			return meta.getLore();
+		}
+		return null;
+	}
+
+	private static String truncate(String input, int maxChars) {
+		if (input == null) {
+			return "";
+		}
+		if (maxChars <= 0 || input.length() <= maxChars) {
+			return input;
+		}
+		return input.substring(0, maxChars) + "…";
+	}
+
+	private static String prettifyMaterialName(Material material) {
+		String[] words = material.name().toLowerCase().split("_");
+		StringBuilder sb = new StringBuilder();
+		for (int i = 0; i < words.length; i++) {
+			if (i > 0) {
+				sb.append(' ');
+			}
+			if (!words[i].isEmpty()) {
+				sb.append(Character.toUpperCase(words[i].charAt(0)));
+				if (words[i].length() > 1) {
+					sb.append(words[i].substring(1));
+				}
+			}
+		}
+		return sb.toString();
 	}
 
 	public static String getLastCode(String s) {
@@ -728,6 +1222,43 @@ public class Format {
 		return allFormated;
 	}
 
+	public static String applyNexoGlyphPlaceholders(Player player, String string) {
+		if (string == null || string.isEmpty()) {
+			return string;
+		}
+		String result = string;
+		if (player != null && NEXO_PLACEHOLDER_PATTERN.matcher(result).find()) {
+			result = PlaceholderAPI.setPlaceholders(player, result);
+		}
+		result = resolveNexoMiniMessageTags(result);
+		return result;
+	}
+
+	// Resolves Nexo's `<glyph:name>` MiniMessage tags (and any tag Nexo has
+	// registered with the global MiniMessage instance) into the actual Unicode
+	// glyph character. Only fires when the string actually contains a
+	// {@code <glyph:} substring so plain text is untouched and other plugins'
+	// legacy `<...>` content is left alone.
+	private static String resolveNexoMiniMessageTags(String string) {
+		if (string == null || string.isEmpty() || !string.contains("<glyph:")) {
+			return string;
+		}
+		try {
+			Component parsed = MiniMessage.miniMessage().deserialize(string);
+			return LegacyComponentSerializer.legacySection().serialize(parsed);
+		} catch (Throwable ignored) {
+			return string;
+		}
+	}
+
+	public static String applyAllPlaceholders(Player player, String string) {
+		if (player == null || string == null || string.isEmpty()) {
+			return string;
+		}
+		String resolved = PlaceholderAPI.setBracketPlaceholders(player, string);
+		return applyNexoGlyphPlaceholders(player, resolved);
+	}
+
 	public static String FilterChat(String msg) {
 		int t = 0;
 		List<String> filters = getInstance().getConfig().getStringList("filters");
@@ -957,37 +1488,86 @@ public class Format {
 	}
 	
 	public static void playMessageSound(MineverseChatPlayer mcp) {
+		if (mcp == null) {
+			return;
+		}
 		Player player = mcp.getPlayer();
+		if (player == null) {
+			return;
+		}
 		String soundName = getInstance().getConfig().getString("message_sound", DEFAULT_MESSAGE_SOUND);
-		if (!soundName.equalsIgnoreCase("None")) {
+		if (soundName.equalsIgnoreCase("None")) {
+			return;
+		}
+		final Sound messageSound;
+		try {
+			messageSound = getSound(soundName);
+		} catch (final Exception e) {
+			if (MineverseChat.getInstance().getConfig().getString("loglevel", "info").equals("debug")) {
+				Bukkit.getConsoleSender().sendMessage(Format.FormatStringAll("&8[&eVentureChat&8]&c - Error playing sound, defaulting to none"));
+			}
+			return;
+		}
+		if (messageSound == null) {
+			return;
+		}
+		// On Folia the entity's location + playSound must be accessed on the
+		// region thread that owns the player, otherwise the call throws.
+		SchedulerUtil.runForEntity(MineverseChat.getInstance(), player, () -> {
 			try {
-				Sound messageSound = getSound(soundName);
 				player.playSound(player.getLocation(), messageSound, 1, 0);
 			} catch (final Exception e) {
 				if (MineverseChat.getInstance().getConfig().getString("loglevel", "info").equals("debug")) {
 					Bukkit.getConsoleSender().sendMessage(Format.FormatStringAll("&8[&eVentureChat&8]&c - Error playing sound, defaulting to none"));
 				}
 			}
-		}
+		});
 	}
 	
 	private static Sound getSound(String soundName) {
-		for (Sound sound : Sound.values()) {
-			if (sound.toString().equalsIgnoreCase(soundName)) {
-				return sound;
-			}
+		Sound sound = resolveSound(soundName);
+		if (sound != null) {
+			return sound;
 		}
 		Bukkit.getConsoleSender().sendMessage(Format.FormatStringAll("&8[&eVentureChat&8]&c - Message sound invalid!"));
 		return getDefaultMessageSound();
 	}
-	
+
 	private static Sound getDefaultMessageSound() {
-		if(VersionHandler.is1_7() || VersionHandler.is1_8()) {
-			return Sound.valueOf(DEFAULT_LEGACY_MESSAGE_SOUND);
+		Sound sound;
+		if (VersionHandler.is1_7() || VersionHandler.is1_8()) {
+			sound = resolveSound(DEFAULT_LEGACY_MESSAGE_SOUND);
+		} else {
+			sound = resolveSound(DEFAULT_MESSAGE_SOUND);
 		}
-		else {
-			return Sound.valueOf(DEFAULT_MESSAGE_SOUND);
+		return sound;
+	}
+
+	private static Sound resolveSound(String soundName) {
+		if (soundName == null || soundName.isEmpty()) {
+			return null;
 		}
+		NamespacedKey key = parseSoundKey(soundName);
+		if (key != null) {
+			Sound sound = Registry.SOUNDS.get(key);
+			if (sound != null) {
+				return sound;
+			}
+		}
+		return null;
+	}
+
+	private static NamespacedKey parseSoundKey(String soundName) {
+		String trimmed = soundName.trim();
+		if (trimmed.isEmpty()) {
+			return null;
+		}
+		if (trimmed.contains(":")) {
+			return NamespacedKey.fromString(trimmed.toLowerCase());
+		}
+		// Enum-style names such as ENTITY_PLAYER_LEVELUP map to entity.player.levelup
+		String normalized = trimmed.toLowerCase().replace('_', '.');
+		return NamespacedKey.minecraft(normalized);
 	}
 	
 	public static String stripColor(String message) {

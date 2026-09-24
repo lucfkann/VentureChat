@@ -56,7 +56,7 @@ public class Ignore extends Command {
 			mcp.getPlayer().sendMessage(LocalizedMessage.IGNORE_YOURSELF.toString());
 			return true;
 		}
-		if (plugin.getConfig().getBoolean("bungeecordmessaging", true)) {
+		if (MineverseChat.isProxyMessagingEnabled()) {
 			ByteArrayOutputStream byteOutStream = new ByteArrayOutputStream();
 			DataOutputStream out = new DataOutputStream(byteOutStream);
 			try {
@@ -95,7 +95,7 @@ public class Ignore extends Command {
 
 	@Override
 	public List<String> tabComplete(CommandSender sender, String label, String[] args) {
-		if (plugin.getConfig().getBoolean("bungeecordmessaging", true)) {
+		if (MineverseChat.isProxyMessagingEnabled()) {
 			List<String> completions = new ArrayList<>();
 			StringUtil.copyPartialMatches(args[args.length - 1], MineverseChatAPI.getNetworkPlayerNames(), completions);
 			Collections.sort(completions);

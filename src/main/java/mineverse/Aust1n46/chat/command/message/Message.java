@@ -11,7 +11,6 @@ import org.bukkit.command.CommandSender;
 import org.bukkit.entity.Player;
 import org.bukkit.util.StringUtil;
 
-import me.clip.placeholderapi.PlaceholderAPI;
 import mineverse.Aust1n46.chat.MineverseChat;
 import mineverse.Aust1n46.chat.api.MineverseChatAPI;
 import mineverse.Aust1n46.chat.api.MineverseChatPlayer;
@@ -38,7 +37,7 @@ public class Message extends Command {
 			return true;
 		}
 
-		if (plugin.getConfig().getBoolean("bungeecordmessaging", true)) {
+		if (MineverseChat.isProxyMessagingEnabled()) {
 			sendBungeeCordMessage(mcp, command, args);
 			return true;
 		}
@@ -82,19 +81,20 @@ public class Message extends Command {
 				if (mcp.getPlayer().hasPermission("venturechat.format")) {
 					msg = Format.FormatString(msg);
 				}
+				msg = Format.applyNexoGlyphPlaceholders(mcp.getPlayer(), msg);
 
-				send = Format.FormatStringAll(PlaceholderAPI.setBracketPlaceholders(mcp.getPlayer(), plugin.getConfig().getString("tellformatfrom").replaceAll("sender_", "")));
-				echo = Format.FormatStringAll(PlaceholderAPI.setBracketPlaceholders(mcp.getPlayer(), plugin.getConfig().getString("tellformatto").replaceAll("sender_", "")));
-				spy = Format.FormatStringAll(PlaceholderAPI.setBracketPlaceholders(mcp.getPlayer(), plugin.getConfig().getString("tellformatspy").replaceAll("sender_", "")));
+				send = Format.FormatStringAll(Format.applyAllPlaceholders(mcp.getPlayer(), plugin.getConfig().getString("tellformatfrom").replaceAll("sender_", "")));
+				echo = Format.FormatStringAll(Format.applyAllPlaceholders(mcp.getPlayer(), plugin.getConfig().getString("tellformatto").replaceAll("sender_", "")));
+				spy = Format.FormatStringAll(Format.applyAllPlaceholders(mcp.getPlayer(), plugin.getConfig().getString("tellformatspy").replaceAll("sender_", "")));
 
-				send = Format.FormatStringAll(PlaceholderAPI.setBracketPlaceholders(player.getPlayer(), send.replaceAll("receiver_", ""))) + msg;
-				echo = Format.FormatStringAll(PlaceholderAPI.setBracketPlaceholders(player.getPlayer(), echo.replaceAll("receiver_", ""))) + msg;
-				spy = Format.FormatStringAll(PlaceholderAPI.setBracketPlaceholders(player.getPlayer(), spy.replaceAll("receiver_", ""))) + msg;
+				send = Format.FormatStringAll(Format.applyAllPlaceholders(player.getPlayer(), send.replaceAll("receiver_", "")));
+				echo = Format.FormatStringAll(Format.applyAllPlaceholders(player.getPlayer(), echo.replaceAll("receiver_", "")));
+				spy = Format.FormatStringAll(Format.applyAllPlaceholders(player.getPlayer(), spy.replaceAll("receiver_", "")));
 
 				player.setReplyPlayer(mcp.getUUID());
 				mcp.setReplyPlayer(player.getUUID());
-				player.getPlayer().sendMessage(send);
-				mcp.getPlayer().sendMessage(echo);
+				Format.sendPrivateMessage(mcp, player.getPlayer(), send, msg);
+				Format.sendPrivateMessage(mcp, mcp.getPlayer(), echo, msg);
 				if (player.hasNotifications()) {
 					Format.playMessageSound(player);
 				}
@@ -104,7 +104,7 @@ public class Message extends Command {
 							continue;
 						}
 						if (sp.isSpy()) {
-							sp.getPlayer().sendMessage(spy);
+							Format.sendPrivateMessage(mcp, sp.getPlayer(), spy, msg);
 						}
 					}
 				}
@@ -148,7 +148,7 @@ public class Message extends Command {
 
 	@Override
 	public List<String> tabComplete(CommandSender sender, String label, String[] args) {
-		if (plugin.getConfig().getBoolean("bungeecordmessaging", true)) {
+		if (MineverseChat.isProxyMessagingEnabled()) {
 			List<String> completions = new ArrayList<>();
 			StringUtil.copyPartialMatches(args[args.length - 1], MineverseChatAPI.getNetworkPlayerNames(), completions);
 			Collections.sort(completions);
@@ -181,12 +181,13 @@ public class Message extends Command {
 		if (mcp.getPlayer().hasPermission("venturechat.format")) {
 			msg = Format.FormatString(msg);
 		}
+		msg = Format.applyNexoGlyphPlaceholders(mcp.getPlayer(), msg);
 
-		String send = Format.FormatStringAll(PlaceholderAPI.setBracketPlaceholders(mcp.getPlayer(), plugin.getConfig().getString("tellformatfrom").replaceAll("sender_", "")));
-		String echo = Format.FormatStringAll(PlaceholderAPI.setBracketPlaceholders(mcp.getPlayer(), plugin.getConfig().getString("tellformatto").replaceAll("sender_", "")));
+		String send = Format.FormatStringAll(Format.applyAllPlaceholders(mcp.getPlayer(), plugin.getConfig().getString("tellformatfrom").replaceAll("sender_", "")));
+		String echo = Format.FormatStringAll(Format.applyAllPlaceholders(mcp.getPlayer(), plugin.getConfig().getString("tellformatto").replaceAll("sender_", "")));
 		String spy = "VentureChat:NoSpy";
 		if (!mcp.getPlayer().hasPermission("venturechat.spy.override")) {
-			spy = Format.FormatStringAll(PlaceholderAPI.setBracketPlaceholders(mcp.getPlayer(), plugin.getConfig().getString("tellformatspy").replaceAll("sender_", "")));
+			spy = Format.FormatStringAll(Format.applyAllPlaceholders(mcp.getPlayer(), plugin.getConfig().getString("tellformatspy").replaceAll("sender_", "")));
 		}
 		try {
 			out.writeUTF("Message");

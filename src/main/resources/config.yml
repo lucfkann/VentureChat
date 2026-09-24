@@ -52,20 +52,216 @@ commandspy:
   format: '&6{player}: {command}'
   worldeditcommands: true
   
+# Plugin-wide defaults inherited by every chat-filter rule (antispam,
+# antiflood, blockedwords) when the rule does not define its own value.
+# Everything here is optional — remove a key to fall back to the built-in
+# default shown as comment.
+#
+# Recidivism: any rule below can define a `recidivism:` block to escalate
+# punishments as the same player keeps triggering the same rule:
+#
+#   recidivism:
+#     reset_after_minutes: 30   # 0 = never reset
+#     levels:
+#       2:
+#         actions:
+#         - 'block'
+#         - 'warn'
+#         - 'mute:5m'
+#       5:
+#         actions:
+#         - 'kick:&cSpam répété'
+#       10:
+#         actions:
+#         - 'cmd:/tempban {player} 1h Récidive de spam ({offense_count})'
+#
+# The base `actions:` is used at offense 1. The highest matching level's
+# `actions:` list overrides it from that offense onward. `reset_after_minutes`
+# controls how long between two offenses before the counter falls back to 1.
+# The placeholder `{offense_count}` is available everywhere the other
+# placeholders are (message, mute_reason, kick_reason, staff_alert_format,
+# cmd: arguments).
+chat_actions:
+  default_actions:            # used when a rule has no `actions:` of its own
+  - 'block'
+  - 'warn'
+  default_mute_reason: 'Chat filter: {rule} (offense {offense_count})'
+  default_kick_reason: '&cKicked by chat filter'
+  staff_permission: 'venturechat.staff.notify'
+  staff_alert_format: '&8[&cChatFilter&8] &7{player} (x{offense_count}) triggered &e{rule}&7 in &f{channel}&7: &f{message}'
+
 antispam:
   enabled: true
-  
+
+  # Bypass permission for players who should never be flagged as spammers.
+  # Use 'None' to disable the bypass entirely.
+  bypass_permission: 'venturechat.spam.bypass'
+
   # Number of messages to be spam
   spamnumber: 5
-  
+
   # Amount of time in seconds for it to be spam
   spamtime: 10
-  
-  # Amount of time for the mute to last
+
+  # Amount of time for the mute to last (used ONLY when `actions:` below is
+  # empty/commented — otherwise `actions:` is the source of truth).
   # Acceptable units are: d,h,m,s
   # Units can be combined, for example: 1d8h30m15s
   # Use 0 for untimed mute
   mutetime: 10m
+
+  # Shown when the sender reaches half of `spamnumber`. Leave empty '' to
+  # keep the built-in localized SpamWarning message.
+  pre_warning_message: ''
+
+  # Optional: hands the spam trigger over to the same action framework used
+  # by antiflood/blockedwords. Supported actions: block, warn, notify_staff,
+  # mute:<time>, kick:<reason>, cmd:<command>. Placeholders in cmd/message/
+  # mute_reason/kick_reason: {player}, {rule}, {message}, {channel}.
+  # Leave this list empty (or delete it) to keep the legacy behavior driven
+  # by `mutetime` above.
+  message: '&cVous envoyez des messages trop rapidement !'
+  mute_reason: 'AutoMute: spam'
+  kick_reason: '&cSpam de messages'
+  staff_permission: 'venturechat.staff.notify'
+  staff_alert_format: '&8[&cAntiSpam&8] &7{player} spamme dans &f{channel}&7: &f{message}'
+  actions: []
+  # Example: block + auto-mute 10 min + notify staff + run a custom command
+  # actions:
+  # - 'block'
+  # - 'mute:10m'
+  # - 'notify_staff'
+  # - 'cmd:/warn {player} Spam dans {channel}'
+
+# Extra flood detection. Runs BEFORE the filters section, on the raw message.
+# Each rule has its own `actions:` list — see the supported actions below.
+#
+# Supported actions (mix and match freely per rule):
+#   - 'block'                → cancel the message entirely (nothing is sent).
+#   - 'warn'                 → send the rule's `message` to the sender.
+#   - 'notify_staff'         → broadcast `staff_alert_format` to every player
+#                              holding `staff_permission`, and to the console.
+#   - 'mute:<time>'          → mute the sender in the channel where they
+#                              tripped the rule. Time units: d/h/m/s (e.g.
+#                              'mute:5m', 'mute:1h30m'). Use 'mute:0' for a
+#                              permanent mute.
+#   - 'kick:<reason>'        → kick the sender with the given reason (& colours).
+#   - 'cmd:<command>'        → run a console command. Placeholders: {player},
+#                              {rule}, {message}, {channel}.
+#
+# Placeholders for `staff_alert_format`: {player}, {rule}, {message}, {channel}.
+# When `actions:` is omitted, the default is ['block', 'warn'].
+antiflood:
+  enabled: true
+  # Fallback staff channel used by `notify_staff` when a rule does not define
+  # its own overrides.
+  staff_permission: 'venturechat.staff.notify'
+  staff_alert_format: '&8[&cChatFilter&8] &7{player} triggered &e{rule}&7 in &f{channel}&7: &f{message}'
+
+  # Blocks resending the exact same message within `window_seconds`.
+  duplicate_messages:
+    enabled: true
+    window_seconds: 15
+    min_length: 3
+    bypass_permission: 'venturechat.antiflood.bypass'
+    message: '&cPlease do not repeat the same message.'
+    mute_reason: 'AutoMute: duplicate messages'
+    kick_reason: '&cRépétition de messages'
+    actions:
+    - 'block'
+    - 'warn'
+  # Blocks messages containing more than `max_repeat` identical characters
+  # in a row (e.g. "aaaaaaaa" or "!!!!!!!!!").
+  character_repeat:
+    enabled: true
+    max_repeat: 6
+    bypass_permission: 'venturechat.antiflood.bypass'
+    message: '&cToo many repeated characters.'
+    mute_reason: 'AutoMute: character flood'
+    kick_reason: '&cSpam de caractères'
+    actions:
+    - 'block'
+    - 'warn'
+    - 'notify_staff'
+  # Blocks messages whose uppercase letter ratio exceeds `max_caps_percent`,
+  # ignored when fewer than `min_length` letters are typed.
+  caps:
+    enabled: true
+    min_length: 8
+    max_caps_percent: 60
+    bypass_permission: 'venturechat.antiflood.bypass'
+    message: '&cPlease avoid excessive uppercase.'
+    mute_reason: 'AutoMute: excessive caps'
+    kick_reason: '&cÉcris en minuscules'
+    actions:
+    - 'block'
+    - 'warn'
+  # Detects keyboard-mash / gibberish like "jbhfhgjghfgjhjgghkhj". A message
+  # is flagged when ANY word in it matches at least one of the three heuristics:
+  #   - the word is longer than `max_word_length` unbroken characters, OR
+  #   - it contains more than `max_consonants_in_row` consecutive consonants, OR
+  #   - it has fewer than `min_vowel_ratio_percent` % vowels (a/e/i/o/u/y +
+  #     French accented forms), only checked when the word is >= min_length.
+  # Digits, punctuation, URLs and glyphs are ignored during the check so
+  # normal chat with numbers or emojis is unaffected.
+  gibberish:
+    enabled: true
+    min_length: 8
+    max_consonants_in_row: 5
+    max_word_length: 25
+    min_vowel_ratio_percent: 15
+    bypass_permission: 'venturechat.antiflood.bypass'
+    message: '&cCe message ressemble à du charabia.'
+    mute_reason: 'AutoMute: gibberish'
+    kick_reason: '&cJoue plutôt qu''écrire du charabia'
+    actions:
+    - 'block'
+    - 'warn'
+
+# Plain word list that BLOCKS the message when any listed word is contained
+# in it (case-insensitive substring match). Different from the `filters`
+# section above, which only rewrites parts of the message.
+# Same action framework as antiflood.
+blockedwords:
+  enabled: true
+  bypass_permission: 'venturechat.blockedwords.bypass'
+  message: '&cThis message contains a forbidden word. (offense #{offense_count})'
+  mute_reason: 'AutoMute: forbidden word ({offense_count})'
+  kick_reason: '&cLangage interdit'
+  staff_permission: 'venturechat.staff.notify'
+  staff_alert_format: '&8[&cBlockedWords&8] &7{player} (x{offense_count}) in &f{channel}&7: &f{message}'
+  # Base actions applied at the first offense
+  actions:
+  - 'block'
+  - 'warn'
+  # Escalating punishment ladder: as the same player keeps tripping this
+  # rule, later offenses swap in the level's actions. Counter falls back to 1
+  # when no offense happens for `reset_after_minutes`.
+  recidivism:
+    reset_after_minutes: 60
+    levels:
+      2:
+        actions:
+        - 'block'
+        - 'warn'
+        - 'mute:5m'
+        - 'notify_staff'
+      4:
+        actions:
+        - 'block'
+        - 'mute:30m'
+        - 'notify_staff'
+      6:
+        actions:
+        - 'kick:&cLangage inapproprié répété ({offense_count} fois)'
+      10:
+        actions:
+        - 'cmd:/tempban {player} 1d Récidive langage interdit ({offense_count})'
+        - 'notify_staff'
+  words:
+  - example_slur
+  - example_ad
+  - discord.gg
  
 # Logging chat and commands to a mysql database 
 mysql:
@@ -109,6 +305,8 @@ vanishsupport: true
 # Use PlaceholderAPI placeholders
 # Start the placeholder with 'sender_' for the sending players placeholder
 # Start the placeholder with 'receiver_' for the receiving players placeholder
+# Nexo glyph placeholders like %nexo_fondateur% are also supported in
+# chat messages, private messages, and alias components.
 # The defaults shown below provide an example of each
 tellformatto: '&7You message {receiver_vault_prefix}{receiver_player_displayname}&7:'
 tellformatfrom: '{sender_vault_prefix}{sender_player_displayname} &7messages you:'
@@ -210,6 +408,32 @@ guirows: 1
 
 # All clickable URL's will be underlined if set to true
 underlineurls: true
+
+# Item chat preview - inspired by CMI / STV [item] feature
+# When a player writes one of the configured placeholders in chat,
+# it will be replaced by a clickable-like tag that shows on hover
+# the name and lore of the item they are currently holding in main hand.
+itemchat:
+  enabled: true
+  # Case sensitive tokens that will be swapped for the held-item preview
+  placeholders:
+  - '[i]'
+  - '[item]'
+  # Text shown in place of the placeholder in chat
+  # Available tokens: {item_name}, {item_amount}, {item_type}
+  format: '&e[&f{item_name}&e]'
+  # Appended to `format` only when the stack size is greater than 1
+  amountsuffix: ' &7x{item_amount}'
+  # Text used when the player is holding nothing in main hand
+  emptyformat: '&8[&7empty hand&8]'
+  # Permission required to trigger the placeholder
+  # Use 'None' to let everyone use it
+  permission: 'venturechat.item'
+  # Safety caps to keep BungeeCord/Velocity forwards under the 65 KB
+  # writeUTF ceiling. Extra lore lines get replaced by a "... (N more)" marker.
+  max_name_length: 100
+  max_lore_lines: 30
+  max_lore_line_length: 250
 
 # broadcast information
 broadcast:

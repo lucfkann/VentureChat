@@ -16,7 +16,6 @@ import org.bukkit.event.server.ServerCommandEvent;
 import org.bukkit.inventory.ItemStack;
 import org.bukkit.inventory.meta.SkullMeta;
 
-import me.clip.placeholderapi.PlaceholderAPI;
 import mineverse.Aust1n46.chat.MineverseChat;
 import mineverse.Aust1n46.chat.alias.Alias;
 import mineverse.Aust1n46.chat.api.MineverseChatAPI;
@@ -100,7 +99,7 @@ public class CommandListener implements Listener {
 					}
 					if (send.length() > 0)
 						send = send.substring(1);
-					s = Format.FormatStringAll(s);
+					s = Format.FormatStringAll(Format.applyAllPlaceholders(mcp.getPlayer(), s));
 					if (mcp.getPlayer().hasPermission("venturechat.color.legacy")) {
 						send = Format.FormatStringLegacyColor(send);
 					}
@@ -110,16 +109,20 @@ public class CommandListener implements Listener {
 					if (mcp.getPlayer().hasPermission("venturechat.format")) {
 						send = Format.FormatString(send);
 					}
+					send = Format.applyNexoGlyphPlaceholders(mcp.getPlayer(), send);
 					if (s.startsWith("Command:")) {
-						mcp.getPlayer().chat(s.substring(9).replace("$", send));
+						String aliasCommand = Format.applyAllPlaceholders(mcp.getPlayer(), s.substring(9).replace("$", send));
+						mcp.getPlayer().chat(aliasCommand);
 						event.setCancelled(true);
 					}
 					if (s.startsWith("Message:")) {
-						mcp.getPlayer().sendMessage(s.substring(9).replace("$", send));
+						String aliasMessage = Format.applyAllPlaceholders(mcp.getPlayer(), s.substring(9).replace("$", send));
+						mcp.getPlayer().sendMessage(aliasMessage);
 						event.setCancelled(true);
 					}
 					if (s.startsWith("Broadcast:")) {
-						Format.broadcastToServer(s.substring(11).replace("$", send));
+						String aliasBroadcast = Format.applyAllPlaceholders(mcp.getPlayer(), s.substring(11).replace("$", send));
+						Format.broadcastToServer(aliasBroadcast);
 						event.setCancelled(true);
 					}
 				}
@@ -165,7 +168,7 @@ public class CommandListener implements Listener {
 				if (target != null) {
 					command = command.replace("{player_name}", target.getName());
 					if (target.isOnline()) {
-						command = Format.FormatStringAll(PlaceholderAPI.setBracketPlaceholders(target.getPlayer(), command));
+						command = Format.FormatStringAll(Format.applyAllPlaceholders(target.getPlayer(), command));
 					}
 				} else {
 					command = command.replace("{player_name}", "Discord_Message");

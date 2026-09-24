@@ -11,8 +11,6 @@ import org.bukkit.ChatColor;
 import org.bukkit.command.Command;
 import org.bukkit.command.CommandSender;
 import org.bukkit.entity.Player;
-import org.bukkit.scheduler.BukkitRunnable;
-
 import com.comphenix.protocol.events.PacketContainer;
 import com.comphenix.protocol.wrappers.WrappedChatComponent;
 
@@ -23,6 +21,7 @@ import mineverse.Aust1n46.chat.api.MineverseChatPlayer;
 import mineverse.Aust1n46.chat.channel.ChatChannel;
 import mineverse.Aust1n46.chat.localization.LocalizedMessage;
 import mineverse.Aust1n46.chat.utilities.Format;
+import mineverse.Aust1n46.chat.utilities.SchedulerUtil;
 
 public class Removemessage extends Command {
 	private MineverseChat plugin = MineverseChat.getInstance();
@@ -63,18 +62,30 @@ public class Removemessage extends Command {
 			}
 			return true;
 		} else {
-			new BukkitRunnable() {
-				public void run() {
-					final Map<Player, List<PacketContainer>> packets = new HashMap();
-					for (MineverseChatPlayer p : MineverseChatAPI.getOnlineMineverseChatPlayers()) {
-						List<ChatMessage> messages = p.getMessages();
-						List<PacketContainer> playerPackets = new ArrayList();
-						boolean resend = false;
-						for (int fill = 0; fill < 100 - messages.size(); fill++) {
-							playerPackets.add(Removemessage.this.emptyLinePacketContainer);
+			SchedulerUtil.runAsync(plugin, () -> {
+				final Map<Player, List<PacketContainer>> packets = new HashMap();
+				for (MineverseChatPlayer p : MineverseChatAPI.getOnlineMineverseChatPlayers()) {
+					List<ChatMessage> messages = p.getMessages();
+					List<PacketContainer> playerPackets = new ArrayList();
+					boolean resend = false;
+					for (int fill = 0; fill < 100 - messages.size(); fill++) {
+						playerPackets.add(Removemessage.this.emptyLinePacketContainer);
+					}
+					for (ChatMessage message : messages) {
+						if (message.getHash() == hash) {
+							WrappedChatComponent removedComponent = p.getPlayer().hasPermission("venturechat.message.bypass")
+									? Removemessage.this.getMessageDeletedChatComponentAdmin(message)
+									: Removemessage.this.getMessageDeletedChatComponentPlayer();
+							message.setComponent(removedComponent);
+							message.setHash(-1);
+							playerPackets.add(Format.createPacketPlayOutChat(removedComponent));
+							resend = true;
+							continue;
 						}
-						for (ChatMessage message : messages) {
-							if (message.getHash() == hash) {
+						if (message.getMessage().contains(ChatColor.stripColor(Format.FormatStringAll(plugin.getConfig().getString("guiicon"))))) {
+							String submessage = message.getMessage().substring(0,
+									message.getMessage().length() - ChatColor.stripColor(Format.FormatStringAll(plugin.getConfig().getString("guiicon"))).length());
+							if (submessage.hashCode() == hash) {
 								WrappedChatComponent removedComponent = p.getPlayer().hasPermission("venturechat.message.bypass")
 										? Removemessage.this.getMessageDeletedChatComponentAdmin(message)
 										: Removemessage.this.getMessageDeletedChatComponentPlayer();
@@ -84,39 +95,26 @@ public class Removemessage extends Command {
 								resend = true;
 								continue;
 							}
-							if (message.getMessage().contains(ChatColor.stripColor(Format.FormatStringAll(plugin.getConfig().getString("guiicon"))))) {
-								String submessage = message.getMessage().substring(0,
-										message.getMessage().length() - ChatColor.stripColor(Format.FormatStringAll(plugin.getConfig().getString("guiicon"))).length());
-								if (submessage.hashCode() == hash) {
-									WrappedChatComponent removedComponent = p.getPlayer().hasPermission("venturechat.message.bypass")
-											? Removemessage.this.getMessageDeletedChatComponentAdmin(message)
-											: Removemessage.this.getMessageDeletedChatComponentPlayer();
-									message.setComponent(removedComponent);
-									message.setHash(-1);
-									playerPackets.add(Format.createPacketPlayOutChat(removedComponent));
-									resend = true;
-									continue;
-								}
-							}
-							playerPackets.add(Format.createPacketPlayOutChat(message.getComponent()));
+						}
+						playerPackets.add(Format.createPacketPlayOutChat(message.getComponent()));
 
-						}
-						if (resend) {
-							packets.put(p.getPlayer(), playerPackets);
-						}
 					}
-					new BukkitRunnable() {
-						public void run() {
-							for (Player p : packets.keySet()) {
-								List<PacketContainer> pPackets = packets.get(p);
-								for (PacketContainer c : pPackets) {
-									Format.sendPacketPlayOutChat(p, c);
-								}
-							}
-						}
-					}.runTask(plugin);
+					if (resend) {
+						packets.put(p.getPlayer(), playerPackets);
+					}
 				}
-			}.runTaskAsynchronously(plugin);
+				// On Folia each Player lives on its own region thread; dispatch packet
+				// batches per player so ProtocolLib writes happen on the owning thread.
+				for (Map.Entry<Player, List<PacketContainer>> entry : packets.entrySet()) {
+					final Player recipient = entry.getKey();
+					final List<PacketContainer> pPackets = entry.getValue();
+					SchedulerUtil.runForEntity(plugin, recipient, () -> {
+						for (PacketContainer c : pPackets) {
+							Format.sendPacketPlayOutChat(recipient, c);
+						}
+					});
+				}
+			});
 			return true;
 		}
 	}

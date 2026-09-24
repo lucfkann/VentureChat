@@ -15,7 +15,9 @@ import mineverse.Aust1n46.chat.api.MineverseChatAPI;
 import mineverse.Aust1n46.chat.api.MineverseChatPlayer;
 import mineverse.Aust1n46.chat.channel.ChatChannel;
 import mineverse.Aust1n46.chat.database.PlayerData;
+import mineverse.Aust1n46.chat.utilities.ChatFilterUtil;
 import mineverse.Aust1n46.chat.utilities.Format;
+import mineverse.Aust1n46.chat.utilities.SchedulerUtil;
 import mineverse.Aust1n46.chat.utilities.UUIDFetcher;
 
 /**
@@ -33,6 +35,7 @@ public class LoginListener implements Listener {
 		mcp.clearMessages();
 		mcp.setOnline(false);
 		MineverseChatAPI.removeMineverseChatOnlinePlayerToMap(mcp);
+		ChatFilterUtil.forget(playerQuitEvent.getPlayer().getUniqueId());
 	}
 	
 	void handleNameChange(MineverseChatPlayer mcp, Player eventPlayerInstance) {
@@ -76,7 +79,7 @@ public class LoginListener implements Listener {
 		if (MineverseChat.isConnectedToProxy()) {
 			long delayInTicks = 20L;
 			final MineverseChatPlayer sync = mcp;
-			plugin.getServer().getScheduler().runTaskLaterAsynchronously(plugin, new Runnable() {
+			SchedulerUtil.runAsyncLater(plugin, new Runnable() {
 				public void run() {
 					MineverseChat.synchronize(sync, false);
 				}

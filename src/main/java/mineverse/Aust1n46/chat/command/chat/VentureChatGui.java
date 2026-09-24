@@ -14,7 +14,6 @@ import org.bukkit.inventory.ItemStack;
 import org.bukkit.inventory.meta.ItemMeta;
 import org.bukkit.inventory.meta.SkullMeta;
 
-import me.clip.placeholderapi.PlaceholderAPI;
 import mineverse.Aust1n46.chat.MineverseChat;
 import mineverse.Aust1n46.chat.api.MineverseChatAPI;
 import mineverse.Aust1n46.chat.api.MineverseChatPlayer;
@@ -115,7 +114,7 @@ public class VentureChatGui extends Command {
 				ItemMeta gMeta = gStack.getItemMeta();
 				String displayName = g.getText().replace("{player_name}", target.getName()).replace("{channel}", channel.getName()).replace("{hash}", hash + "");
 				if (target.isOnline()) {
-					displayName = PlaceholderAPI.setBracketPlaceholders(target.getPlayer(), displayName);
+					displayName = Format.applyAllPlaceholders(target.getPlayer(), displayName);
 				}
 				gMeta.setDisplayName(Format.FormatStringAll(displayName));
 				List<String> gLore = new ArrayList<String>();

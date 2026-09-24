@@ -10,6 +10,7 @@ import java.util.UUID;
 
 import org.bukkit.Bukkit;
 import org.bukkit.entity.Player;
+import org.bukkit.inventory.ItemStack;
 
 import mineverse.Aust1n46.chat.ChatMessage;
 import mineverse.Aust1n46.chat.channel.ChatChannel;
@@ -53,6 +54,10 @@ public class MineverseChatPlayer {
 	private boolean rangedSpy;
 	private boolean messageToggle;
 	private boolean bungeeToggle;
+	// Snapshot of the sender's main-hand item captured at chat/command dispatch
+	// so item chat previews can be built off-thread without touching the live
+	// inventory (required for Folia compatibility).
+	private volatile ItemStack chatHeldItemSnapshot;
 	
 	@Deprecated
 	public MineverseChatPlayer(UUID uuid, String name, ChatChannel currentChannel, Set<UUID> ignores, Set<String> listening, HashMap<String, MuteContainer> mutes, Set<String> blockedCommands, boolean host, UUID party, boolean filter, boolean notifications, String nickname, String jsonFormat, boolean spy, boolean commandSpy, boolean rangedSpy, boolean messageToggle, boolean bungeeToggle) {
@@ -143,6 +148,14 @@ public class MineverseChatPlayer {
 	
 	public void setBungeeToggle(boolean bungeeToggle) {
 		this.bungeeToggle = bungeeToggle;
+	}
+
+	public ItemStack getChatHeldItemSnapshot() {
+		return this.chatHeldItemSnapshot;
+	}
+
+	public void setChatHeldItemSnapshot(ItemStack chatHeldItemSnapshot) {
+		this.chatHeldItemSnapshot = chatHeldItemSnapshot;
 	}
 	
 	public boolean getMessageToggle() {

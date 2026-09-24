@@ -55,6 +55,7 @@ import mineverse.Aust1n46.chat.command.mute.Muteall;
 import mineverse.Aust1n46.chat.command.mute.Unmute;
 import mineverse.Aust1n46.chat.command.mute.Unmuteall;
 import mineverse.Aust1n46.chat.utilities.Format;
+import mineverse.Aust1n46.chat.utilities.SchedulerUtil;
 
 /**
  * Class that initializes and executes the plugin's commands.
@@ -166,11 +167,11 @@ public class VentureCommandExecutor {
 		}
 		// Forcibly re-register enabled VentureChat commands on a delay to ensure they
 		// have priority
-		server.getScheduler().runTaskLater(plugin, () -> {
+		SchedulerUtil.runGlobalLater(plugin, () -> {
 			for (final Entry<String, Command> commandEntry : commands.entrySet()) {
 				registerCommand(commandEntry.getKey(), commandEntry.getValue());
 			}
-		}, 10);
+		}, 10L);
 	}
 
 	public static void registerCommand(final String commandLabel, final Command command) {

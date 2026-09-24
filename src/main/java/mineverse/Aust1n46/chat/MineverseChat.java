@@ -20,12 +20,10 @@ import org.bukkit.plugin.PluginManager;
 import org.bukkit.plugin.RegisteredServiceProvider;
 import org.bukkit.plugin.java.JavaPlugin;
 import org.bukkit.plugin.messaging.PluginMessageListener;
-import org.bukkit.scheduler.BukkitScheduler;
 
 import com.comphenix.protocol.ProtocolLibrary;
 import com.comphenix.protocol.events.PacketContainer;
 
-import me.clip.placeholderapi.PlaceholderAPI;
 import mineverse.Aust1n46.chat.alias.Alias;
 import mineverse.Aust1n46.chat.api.MineverseChatAPI;
 import mineverse.Aust1n46.chat.api.MineverseChatPlayer;
@@ -47,6 +45,7 @@ import mineverse.Aust1n46.chat.listeners.SignListener;
 import mineverse.Aust1n46.chat.localization.Localization;
 import mineverse.Aust1n46.chat.localization.LocalizedMessage;
 import mineverse.Aust1n46.chat.utilities.Format;
+import mineverse.Aust1n46.chat.utilities.SchedulerUtil;
 import mineverse.Aust1n46.chat.versions.VersionHandler;
 import net.milkbowl.vault.chat.Chat;
 import net.milkbowl.vault.permission.Permission;
@@ -80,6 +79,7 @@ public class MineverseChat extends JavaPlugin implements PluginMessageListener {
 	private static Chat chat = null;
 
 	// TODO: This won't be so poorly done in the 4.0.0 branch I promise...
+	@SuppressWarnings({"deprecation", "removal"}) // Paper deprecates these; we still call them behind a NoSuchMethodError guard because there is no cross-version replacement that works on both Spigot and modern Paper.
 	public static boolean isConnectedToProxy() {
 		try {
 			final MineverseChat plugin = MineverseChat.getInstance();
@@ -88,6 +88,11 @@ public class MineverseChat extends JavaPlugin implements PluginMessageListener {
 					|| plugin.getServer().spigot().getPaperConfig().getBoolean("proxies.velocity.enabled"));
 		} catch (final NoSuchMethodError ignored) {} // Thrown if server isn't Paper.
 		return false;
+	}
+
+	public static boolean isProxyMessagingEnabled() {
+		final MineverseChat plugin = MineverseChat.getInstance();
+		return plugin.getConfig().getBoolean("bungeecordmessaging", true) && isConnectedToProxy();
 	}
 	
 	@Override
@@ -106,6 +111,10 @@ public class MineverseChat extends JavaPlugin implements PluginMessageListener {
 			}
 			else {
 				Bukkit.getConsoleSender().sendMessage(Format.FormatStringAll("&8[&eVentureChat&8]&e - Config found! Loading file."));
+				// Recursively add any key that landed in the bundled defaults
+				// but is missing from the on-disk config, without touching
+				// values the admin has already customised.
+				mineverse.Aust1n46.chat.utilities.ConfigMigrator.migrate(this, "config.yml", file);
 			}
 			saveResource("example_config_always_up_to_date!.yml", true);
 		}
@@ -127,7 +136,7 @@ public class MineverseChat extends JavaPlugin implements PluginMessageListener {
 		PlayerData.loadLegacyPlayerData();
 		PlayerData.loadPlayerData();
 		
-		Bukkit.getScheduler().runTaskAsynchronously(this, () -> {
+		SchedulerUtil.runAsync(this, () -> {
 			Database.initializeMySQL();
 		});
 
@@ -141,6 +150,10 @@ public class MineverseChat extends JavaPlugin implements PluginMessageListener {
 			Bukkit.getConsoleSender().sendMessage(Format.FormatStringAll("&8[&eVentureChat&8]&e - Establishing BungeeCord"));
 			Bukkit.getMessenger().registerOutgoingPluginChannel(this, PLUGIN_MESSAGING_CHANNEL);
 			Bukkit.getMessenger().registerIncomingPluginChannel(this, PLUGIN_MESSAGING_CHANNEL, this);
+		}
+		if (getConfig().getBoolean("bungeecordmessaging", true) && !MineverseChat.isConnectedToProxy()) {
+			Bukkit.getConsoleSender().sendMessage(Format.FormatStringAll("&8[&eVentureChat&8]&e - &cBungee messaging is enabled in config but no proxy connection was detected."));
+			Bukkit.getConsoleSender().sendMessage(Format.FormatStringAll("&8[&eVentureChat&8]&e - &cCross-server sync is disabled until proxy forwarding is configured."));
 		}
 		
 		PluginManager pluginManager = getServer().getPluginManager();
@@ -176,8 +189,7 @@ public class MineverseChat extends JavaPlugin implements PluginMessageListener {
 	}
 	
 	private void startRepeatingTasks() {
-		BukkitScheduler scheduler = Bukkit.getServer().getScheduler();
-		scheduler.runTaskTimerAsynchronously(this, new Runnable() {
+		SchedulerUtil.runAsyncTimer(this, new Runnable() {
 			@Override
 			public void run() {
 				PlayerData.savePlayerData();
@@ -185,9 +197,9 @@ public class MineverseChat extends JavaPlugin implements PluginMessageListener {
 					Bukkit.getConsoleSender().sendMessage(Format.FormatStringAll("&8[&eVentureChat&8]&e - Saving Player Data"));
 				}
 			}
-		}, 0L, getConfig().getInt("saveinterval") * 1200); //one minute * save interval
-		
-		scheduler.runTaskTimerAsynchronously(this, new Runnable() {
+		}, 1L, getConfig().getInt("saveinterval") * 1200L); //one minute * save interval
+
+		SchedulerUtil.runAsyncTimer(this, new Runnable() {
 			@Override
 			public void run() {
 				for (MineverseChatPlayer p : MineverseChatAPI.getOnlineMineverseChatPlayers()) {
@@ -221,7 +233,7 @@ public class MineverseChat extends JavaPlugin implements PluginMessageListener {
 							.sendMessage(Format.FormatStringAll("&8[&eVentureChat&8]&e - Updating Player Mutes"));
 				}
 			}
-		}, 0L, 60L); // three second interval
+		}, 1L, 60L); // three second interval
 	}
 	
 	private void registerListeners() {
@@ -283,7 +295,7 @@ public class MineverseChat extends JavaPlugin implements PluginMessageListener {
 				// System.out.println(mcp.getPlayer().getServer().getServerName());
 				// out.writeUTF(mcp.getPlayer().getServer().getServerName());
 				out.writeUTF(mcp.getUUID().toString());
-				Bukkit.getServer().getScheduler().runTaskLaterAsynchronously(getInstance(), new Runnable() {
+				SchedulerUtil.runAsyncLater(getInstance(), new Runnable() {
 					@Override
 					public void run() {
 						if(!mcp.isOnline() || mcp.hasPlayed()) {
@@ -419,7 +431,7 @@ public class MineverseChat extends JavaPlugin implements PluginMessageListener {
 					}
 				}
 				
-				Bukkit.getServer().getScheduler().runTaskAsynchronously(this, new Runnable() {
+				SchedulerUtil.runAsync(this, new Runnable() {
 					@Override
 					public void run() {
 						//Create VentureChatEvent
@@ -612,7 +624,7 @@ public class MineverseChat extends JavaPlugin implements PluginMessageListener {
 					String receiver = msgin.readUTF();
 					MineverseChatPlayer p = MineverseChatAPI.getOnlineMineverseChatPlayer(receiver);
 					UUID sender = UUID.fromString(msgin.readUTF());
-					if(!getConfig().getBoolean("bungeecordmessaging", true) || p == null || !p.isOnline()) {
+					if(!MineverseChat.isProxyMessagingEnabled() || p == null || !p.isOnline()) {
 						out.writeUTF("Ignore");
 						out.writeUTF("Offline");
 						out.writeUTF(server);
@@ -1002,7 +1014,7 @@ public class MineverseChat extends JavaPlugin implements PluginMessageListener {
 					String echo = msgin.readUTF();
 					String spy = msgin.readUTF();
 					String msg = msgin.readUTF();
-					if(!getConfig().getBoolean("bungeecordmessaging", true) || p == null) {
+					if(!MineverseChat.isProxyMessagingEnabled() || p == null) {
 						out.writeUTF("Message");
 						out.writeUTF("Offline");
 						out.writeUTF(server);
@@ -1029,7 +1041,7 @@ public class MineverseChat extends JavaPlugin implements PluginMessageListener {
 						sendPluginMessage(stream);
 						return;
 					}
-					p.getPlayer().sendMessage(Format.FormatStringAll(PlaceholderAPI.setBracketPlaceholders(p.getPlayer(), send.replaceAll("receiver_", ""))) + msg);
+					p.getPlayer().sendMessage(Format.FormatStringAll(Format.applyAllPlaceholders(p.getPlayer(), send.replaceAll("receiver_", ""))) + msg);
 					if(p.hasNotifications()) {
 						Format.playMessageSound(p);
 					}
@@ -1046,8 +1058,8 @@ public class MineverseChat extends JavaPlugin implements PluginMessageListener {
 					out.writeUTF(p.getUUID().toString());
 					out.writeUTF(sender.toString());
 					out.writeUTF(sName);
-					out.writeUTF(Format.FormatStringAll(PlaceholderAPI.setBracketPlaceholders(p.getPlayer(), echo.replaceAll("receiver_", ""))) + msg);
-					out.writeUTF(Format.FormatStringAll(PlaceholderAPI.setBracketPlaceholders(p.getPlayer(), spy.replaceAll("receiver_", ""))) + msg);
+					out.writeUTF(Format.FormatStringAll(Format.applyAllPlaceholders(p.getPlayer(), echo.replaceAll("receiver_", ""))) + msg);
+					out.writeUTF(Format.FormatStringAll(Format.applyAllPlaceholders(p.getPlayer(), spy.replaceAll("receiver_", ""))) + msg);
 					sendPluginMessage(stream);
 					return;
 				}
