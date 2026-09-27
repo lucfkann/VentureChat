@@ -450,33 +450,13 @@ broadcast:
 # Example: permissions: alert equals venturechat.alert
 # Use None for no permissions
 # The number of arguments is the minimum number of required arguments, use 0 for no required arguments
-alias:  
-  vote:
-    arguments: 0
-    permissions: None
-    components:
-    - 'Message: &6Vote here: www.votelinkhere.com'
-  bane:
-    arguments: 2
-    permissions: bane
-    components:
-    - 'Command: /ban $ appeal at www.site.com'
-    - 'Command: /st banned $'
-  alert:
-    arguments: 1
-    permissions: alert
-    components:
-    - 'Broadcast: &c<Alert> $'
-  donate:
-    arguments: 0
-    permissions: None
-    components:
-    - 'Message: &bDonate here: www.mywebsite.com'
-  website:
-    arguments: 0
-    permissions: None
-    components:
-    - 'Message: &aThis is our website: www.site.net'
+alias:
+  #bane:
+   # arguments: 2
+   # permissions: bane
+   # components:
+   # - 'Command: /ban $ appeal at www.site.com'
+   # - 'Command: /st banned $'
   
 # Enables the creation of special Towny channels: Town and Nation
 # To create these channels, simply name two channels below "Town" and "Nation"

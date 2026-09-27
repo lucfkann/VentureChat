@@ -51,14 +51,18 @@ public class ChatListener implements Listener {
 		// Snapshot the sender's held item BEFORE going async so it can be safely
 		// read from off-thread code (needed on Folia where inventory access
 		// from an unrelated thread is forbidden).
-		final MineverseChatPlayer senderMcp = MineverseChatAPI.getOnlineMineverseChatPlayer(event.getPlayer());
-		if (senderMcp != null) {
-			try {
-				org.bukkit.inventory.ItemStack held = event.getPlayer().getInventory().getItemInMainHand();
-				senderMcp.setChatHeldItemSnapshot(held == null ? null : held.clone());
-			} catch (Exception ignored) {
-				senderMcp.setChatHeldItemSnapshot(null);
-			}
+		final MineverseChatPlayer senderMcp = resolveOrRegister(event.getPlayer());
+		if (senderMcp == null) {
+			// Player data still unavailable — most likely the player joined
+			// just now and the login listener hasn't run yet. Drop this one
+			// message rather than crashing the async worker.
+			return;
+		}
+		try {
+			org.bukkit.inventory.ItemStack held = event.getPlayer().getInventory().getItemInMainHand();
+			senderMcp.setChatHeldItemSnapshot(held == null ? null : held.clone());
+		} catch (Exception ignored) {
+			senderMcp.setChatHeldItemSnapshot(null);
 		}
 		SchedulerUtil.runAsync(plugin, new Runnable() {
 			@Override
@@ -67,6 +71,28 @@ public class ChatListener implements Listener {
 			}
 		});
 	}
+
+	// Fetches the sender's MineverseChatPlayer, and best-effort re-registers
+	// them if the online map has lost track (login race, /chatreload --full).
+	private static MineverseChatPlayer resolveOrRegister(Player player) {
+		if (player == null) {
+			return null;
+		}
+		MineverseChatPlayer mcp = MineverseChatAPI.getOnlineMineverseChatPlayer(player);
+		if (mcp != null) {
+			return mcp;
+		}
+		mcp = MineverseChatAPI.getMineverseChatPlayer(player);
+		if (mcp == null) {
+			mcp = new MineverseChatPlayer(player.getUniqueId(), player.getName());
+			MineverseChatAPI.addMineverseChatPlayerToMap(mcp);
+			MineverseChatAPI.addNameToMap(mcp);
+		}
+		mcp.setOnline(true);
+		mcp.setJsonFormat();
+		MineverseChatAPI.addMineverseChatOnlinePlayerToMap(mcp);
+		return mcp;
+	}
 	
 	public void handleTrueAsyncPlayerChatEvent(AsyncPlayerChatEvent event) {
 		boolean bungee = false;
@@ -74,7 +100,13 @@ public class ChatListener implements Listener {
 		String format;
 		Set<Player> recipients = event.getRecipients();
 		int recipientCount = recipients.size(); // Don't count vanished players
-		MineverseChatPlayer mcp = MineverseChatAPI.getOnlineMineverseChatPlayer(event.getPlayer());
+		MineverseChatPlayer mcp = resolveOrRegister(event.getPlayer());
+		if (mcp == null || mcp.getCurrentChannel() == null) {
+			// No data / no channel set yet — safest to drop this message
+			// silently rather than throw. The chat event was already cancelled
+			// by the caller so nothing will reach the players anyway.
+			return;
+		}
 		ChatChannel eventChannel = mcp.getCurrentChannel();
 		
 		if(mcp.isEditing()) {
