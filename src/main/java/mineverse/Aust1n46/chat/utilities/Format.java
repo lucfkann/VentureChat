@@ -440,7 +440,14 @@ public class Format {
 		// item tooltip. This carries over Nexo tooltype styling, custom model
 		// data, glyphs, enchantment lines and every data component without us
 		// having to reconstruct them by hand.
-		String nativeHover = buildShowItemJson(text, item);
+		// Resolve the display name Component (with font info preserved) and the
+		// format parts around {item_name} so the visible text can be composed
+		// without losing custom font keys (needed for resource-pack glyphs).
+		Component displayNameComponent = getItemDisplayNameComponent(item);
+		String formatWithReplacements = format
+				.replace("{item_amount}", String.valueOf(amount))
+				.replace("{item_type}", type.name());
+		String nativeHover = buildShowItemJson(text, item, senderPlayer, formatWithReplacements, displayNameComponent);
 		if (nativeHover != null) {
 			return nativeHover;
 		}
@@ -448,9 +455,24 @@ public class Format {
 		return buildShowTextFallback(escapedText, senderPlayer, itemName, getItemLore(item));
 	}
 
-	private static String buildShowItemJson(String visibleLegacyText, ItemStack item) {
+	private static String buildShowItemJson(String visibleLegacyText, ItemStack item,
+			Player sender, String formatTemplate, Component displayNameComponent) {
 		try {
-			Component visible = LegacyComponentSerializer.legacySection().deserialize(visibleLegacyText);
+			Component visible;
+			int nameIdx = formatTemplate != null ? formatTemplate.indexOf("{item_name}") : -1;
+			if (displayNameComponent != null && nameIdx >= 0) {
+				String prefixFmt = formatTemplate.substring(0, nameIdx);
+				String suffixFmt = formatTemplate.substring(nameIdx + "{item_name}".length());
+				String prefix = applyNexoGlyphPlaceholders(sender, FormatStringAll(prefixFmt));
+				String suffix = applyNexoGlyphPlaceholders(sender, FormatStringAll(suffixFmt));
+				Component prefixComp = prefix.isEmpty() ? Component.empty()
+						: LegacyComponentSerializer.legacySection().deserialize(prefix);
+				Component suffixComp = suffix.isEmpty() ? Component.empty()
+						: LegacyComponentSerializer.legacySection().deserialize(suffix);
+				visible = Component.text("").append(prefixComp).append(displayNameComponent).append(suffixComp);
+			} else {
+				visible = LegacyComponentSerializer.legacySection().deserialize(visibleLegacyText);
+			}
 			HoverEvent<?> hover = item.asHoverEvent();
 			Component withHover = visible.hoverEvent(hover);
 			String serialized = GsonComponentSerializer.gson().serialize(withHover);
@@ -461,6 +483,30 @@ public class Format {
 		} catch (Throwable ignored) {
 			return null;
 		}
+	}
+
+	private static Component getItemDisplayNameComponent(ItemStack item) {
+		ItemMeta meta = (item != null && item.hasItemMeta()) ? item.getItemMeta() : null;
+		if (meta != null) {
+			try {
+				Component c = meta.displayName();
+				if (c != null) return c;
+			} catch (Throwable ignored) {}
+			try {
+				if (meta.hasItemName()) {
+					Component c = meta.itemName();
+					if (c != null) return c;
+				}
+			} catch (Throwable ignored) {}
+		}
+		if (item != null) {
+			try {
+				java.lang.reflect.Method effective = item.getClass().getMethod("effectiveName");
+				Object result = effective.invoke(item);
+				if (result instanceof Component) return (Component) result;
+			} catch (Throwable ignored) {}
+		}
+		return null;
 	}
 
 	private static String buildShowTextFallback(String escapedVisibleText, Player senderPlayer, String itemName, List<String> lore) {
